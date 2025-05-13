@@ -1,2 +1,3 @@
 # sekai-apphash-updater
-Scan and extract apphash of Project Sekai: Colorful Stage
+
+Scan and extract apphash of Project Sekai: Colorful Stage feat. Hatsune Miku

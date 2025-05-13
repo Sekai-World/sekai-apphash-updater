@@ -1,0 +1,15 @@
+[project]
+name = "sekai-apphash-updater"
+version = "0.1.0"
+description = "Scan and extract apphash of Project Sekai: Colorful Stage feat. Hatsune Miku"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiocron>=2.1",
+    "aiofiles>=24.1.0",
+    "aiohttp>=3.11.18",
+    "aiopath>=0.7.7",
+    "beautifulsoup4>=4.13.4",
+    "tqdm>=4.67.1",
+    "unitypy>=1.22.2",
+]
