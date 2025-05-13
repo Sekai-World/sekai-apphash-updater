@@ -37,7 +37,5 @@ def setup_logging_queue() -> None:
             root.removeHandler(h)
             handlers.append(h)
 
-    listener = logging.handlers.QueueListener(
-        queue, *handlers, respect_handler_level=True
-    )
+    listener = logging.handlers.QueueListener(queue, *handlers, respect_handler_level=True)
     listener.start()

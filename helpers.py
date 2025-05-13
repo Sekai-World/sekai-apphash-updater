@@ -11,9 +11,7 @@ def enum_candidates(zip_file, filter):
     Returns:
         tuple: A tuple containing the filename, file object, and zip file object.
     """
-    return (
-        (f, zip_file.open(f), zip_file) for f in zip_file.filelist if filter(f.filename)
-    )
+    return ((f, zip_file.open(f), zip_file) for f in zip_file.filelist if filter(f.filename))
 
 
 def enum_package(zip_file):

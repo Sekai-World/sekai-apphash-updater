@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import tempfile
@@ -14,7 +15,7 @@ from aiopath import AsyncPath
 from bs4 import BeautifulSoup
 from tqdm.asyncio import tqdm
 
-from config import APPHASH_CACHE_FOLDER, APPVER_CACHE_FOLDER, DEFAULT_UNITY_VERSION
+from config import APPHASH_CACHE_FOLDER, APPVER_CACHE_FOLDER, DEFAULT_UNITY_VERSION, APPVER_JSON_CACHE_FOLDER
 from constants import (
     APKPURE_URL_TEMPLATE,
     CN_APK_URL,
@@ -23,7 +24,7 @@ from constants import (
     QOOAPP_URL_TEMPLATE,
     TAPTAP_APP_ID_MAP,
     TAPTAP_CN_URL_TEMPLATE,
-    USER_AGENT
+    USER_AGENT,
 )
 from generated import UTTCGen_AsInstance
 from generated.Sekai import AndroidPlayerSettingConfig
@@ -54,15 +55,11 @@ async def get_app_ver_from_taptap_cn(app_id: str) -> str:
                 match = re.search(r'"softwareVersion":"(\d+\.\d+\.\d+)"', data)
                 app_ver = match.group(1)
 
-                logger.info(
-                    f"Fetched version {app_ver} for app id {app_id} from TapTap CN"
-                )
+                logger.info(f"Fetched version {app_ver} for app id {app_id} from TapTap CN")
 
                 return app_ver
             else:
-                raise Exception(
-                    f"Failed to fetch version from TapTap CN: {response.status}"
-                )
+                raise Exception(f"Failed to fetch version from TapTap CN: {response.status}")
 
 
 async def get_app_ver_from_qooapp(app_id: str) -> str:
@@ -82,15 +79,11 @@ async def get_app_ver_from_qooapp(app_id: str) -> str:
                 app_info_tree = soup.select("ul.app-info.android")[0]
                 app_ver = app_info_tree.find_all(class_="row")[1].var.text
 
-                logger.info(
-                    f"Fetched version {app_ver} for app id {app_id} from QooApp"
-                )
+                logger.info(f"Fetched version {app_ver} for app id {app_id} from QooApp")
 
                 return app_ver
             else:
-                raise Exception(
-                    f"Failed to fetch version from QooApp: {response.status}"
-                )
+                raise Exception(f"Failed to fetch version from QooApp: {response.status}")
 
 
 async def download_apk(url: str) -> str:
@@ -184,6 +177,30 @@ async def save_app_hash(region: str, app_hash: str):
         logger.info(f"Saved app hash {app_hash} for {region} to cache.")
 
 
+async def save_app_json(region: str, app_ver: str, app_hash: str):
+    """
+    Saves the app version and app hash json to the cache for the specified region.
+    Args:
+        region (str): The region for which to save the app version.
+        app_ver (str): The app version to save.
+        app_hash (str): The app hash to save.
+    """
+    data = {
+        "appVersion": app_ver,
+        "appHash": app_hash,
+    }
+
+    cache_file = AsyncPath(APPVER_JSON_CACHE_FOLDER) / f"{region}.json"
+
+    if not await cache_file.parent.exists():
+        logger.warning(f"Cache folder for {region} does not exist. Creating it.")
+        await cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    async with aiofiles.open(cache_file, "w") as f:
+        await f.write(json.dumps(data, indent=2, ensure_ascii=False))
+        logger.info(f"Saved app hash {app_hash} for {region} to cache.")
+
+
 async def extract_app_hash(apk_path: str) -> str:
     """
     Extracts the app hash from the APK file. Thanks to sssekai project for the code.
@@ -263,9 +280,7 @@ async def update_apphash():
 
             await save_app_hash(region, app_hash)
             await save_app_ver(region, latest_app_ver)
-            logger.info(
-                f"App hash for {region} updated to {app_hash} for version {latest_app_ver}"
-            )
+            logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
 
             # Clean up the temporary APK file
             await AsyncPath(apk_path).unlink()
@@ -284,9 +299,7 @@ async def update_apphash():
 
             await save_app_hash(region, app_hash)
             await save_app_ver(region, latest_app_ver)
-            logger.info(
-                f"App hash for {region} updated to {app_hash} for version {latest_app_ver}"
-            )
+            logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
 
             # Clean up the temporary APK file
             await AsyncPath(apk_path).unlink()
