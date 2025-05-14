@@ -1,4 +1,4 @@
 APPVER_CACHE_FOLDER = "cache/appver"
 APPHASH_CACHE_FOLDER = "cache/apphash"
-
+APPVER_JSON_CACHE_FOLDER = "cache/apphash_json"
 DEFAULT_UNITY_VERSION = "2022.3.21f1"
