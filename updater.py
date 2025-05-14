@@ -299,6 +299,7 @@ async def update_apphash():
 
             await save_app_hash(region, app_hash)
             await save_app_ver(region, latest_app_ver)
+            await save_app_json(region, latest_app_ver, app_hash)
             logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
 
             # Clean up the temporary APK file
