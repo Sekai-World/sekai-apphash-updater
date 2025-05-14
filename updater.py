@@ -15,7 +15,7 @@ from aiopath import AsyncPath
 from bs4 import BeautifulSoup
 from tqdm.asyncio import tqdm
 
-from config import APPHASH_CACHE_FOLDER, APPVER_CACHE_FOLDER, DEFAULT_UNITY_VERSION, APPVER_JSON_CACHE_FOLDER
+from config import APPHASH_CACHE_FOLDER, APPVER_CACHE_FOLDER, DEFAULT_UNITY_VERSION, APPVER_JSON_CACHE_FOLDER, PROXY
 from constants import (
     APKPURE_URL_TEMPLATE,
     CN_APK_URL,
@@ -49,6 +49,7 @@ async def get_app_ver_from_taptap_cn(app_id: str) -> str:
             headers={
                 "User-Agent": USER_AGENT,
             },
+            proxy=PROXY,
         ) as response:
             if response.status == 200:
                 data = await response.text()
@@ -72,7 +73,7 @@ async def get_app_ver_from_qooapp(app_id: str) -> str:
     """
     url = QOOAPP_URL_TEMPLATE.format(app_id=app_id)
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
+        async with session.get(url, proxy=PROXY) as response:
             if response.status == 200:
                 data = await response.text()
                 soup = BeautifulSoup(data, "html.parser")
@@ -97,7 +98,7 @@ async def download_apk(url: str) -> str:
     # Use aiohttp to download the APK file asynchronously
     # and tqdm to show a progress bar.
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
+        async with session.get(url, proxy=PROXY) as response:
             total_size = int(response.headers.get("content-length", 0))
             block_size = 1024  # 1 Kibibyte
 
