@@ -202,7 +202,7 @@ async def save_app_json(region: str, app_ver: str, app_hash: str):
         logger.info(f"Saved app hash {app_hash} for {region} to cache.")
 
 
-async def extract_app_hash(apk_path: str) -> str:
+async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str:
     """
     Extracts the app hash from the APK file. Thanks to sssekai project for the code.
     Args:
@@ -246,6 +246,9 @@ async def extract_app_hash(apk_path: str) -> str:
                     config.clientDataMinorVersion,
                     config.clientDataBuildVersion,
                 )
+                assert app_version == expected_app_ver, (
+                    f"App version mismatch: {app_version} != {expected_app_ver}"
+                )
                 logger.info(f"Data version: {data_version}")
                 ab_version = "%s.%s.%s" % (
                     config.clientMajorVersion,
@@ -277,7 +280,7 @@ async def update_apphash():
             logger.info(f"New version available for {region}: {latest_app_ver}")
             apk_url = APKPURE_URL_TEMPLATE.format(packageName=PACKAGE_NAME_MAP[region])
             apk_path = await download_apk(apk_url)
-            app_hash = await extract_app_hash(apk_path)
+            app_hash = await extract_app_hash(apk_path, latest_app_ver)
 
             await save_app_hash(region, app_hash)
             await save_app_ver(region, latest_app_ver)
@@ -297,7 +300,7 @@ async def update_apphash():
             logger.info(f"New version available for {region}: {latest_app_ver}")
             apk_url = CN_APK_URL
             apk_path = await download_apk(apk_url)
-            app_hash = await extract_app_hash(apk_path)
+            app_hash = await extract_app_hash(apk_path, latest_app_ver)
 
             await save_app_hash(region, app_hash)
             await save_app_ver(region, latest_app_ver)
@@ -322,9 +325,9 @@ if __name__ == "__main__":
     UnityPy.config.FALLBACK_UNITY_VERSION = DEFAULT_UNITY_VERSION
 
     # Start the cron job to update app hash every 5 minutes
-    update_apphash.start()
+    # update_apphash.start()
     # Run the event loop
     # This is necessary to keep the script running and allow the cron job to execute
-    asyncio.get_event_loop().run_forever()
+    # asyncio.get_event_loop().run_forever()
 
-    # asyncio.run(update_apphash())
+    asyncio.run(update_apphash.func())
