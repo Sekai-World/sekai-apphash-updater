@@ -4,18 +4,26 @@ import logging
 import re
 import tempfile
 import zipfile
+from typing import Optional
 
-import aiocron
-import aiofiles
-import aiohttp
 import UnityPy
 import UnityPy.enums
 import UnityPy.enums.ClassIDType
+import aiocron
+import aiofiles
+import aiohttp
 from aiopath import AsyncPath
 from bs4 import BeautifulSoup
 from tqdm.asyncio import tqdm
 
-from config import APPHASH_CACHE_FOLDER, APPVER_CACHE_FOLDER, DEFAULT_UNITY_VERSION, APPVER_JSON_CACHE_FOLDER, PROXY
+from config import (
+    APPHASH_CACHE_FOLDER,
+    APPVER_CACHE_FOLDER,
+    DEFAULT_UNITY_VERSION,
+    APPVER_JSON_CACHE_FOLDER,
+    PROXY,
+    DEBUG,
+)
 from constants import (
     APKPURE_URL_TEMPLATE,
     CN_APK_URL,
@@ -28,7 +36,7 @@ from constants import (
 )
 from generated import UTTCGen_AsInstance
 from generated.Sekai import AndroidPlayerSettingConfig
-from helpers import enum_candidates, enum_package
+from helpers import enum_candidates, enum_package, compare_version
 from logger import setup_logging_queue
 
 logger = logging.getLogger("apphash")
@@ -202,10 +210,11 @@ async def save_app_json(region: str, app_ver: str, app_hash: str):
         logger.info(f"Saved app hash {app_hash} for {region} to cache.")
 
 
-async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str:
+async def extract_app_hash(apk_path: str, expected_app_ver: str) -> Optional[str]:
     """
     Extracts the app hash from the APK file. Thanks to sssekai project for the code.
     Args:
+        expected_app_ver: expected app version.
         apk_path (str): The path to the APK file.
     Returns:
         str: The app hash.
@@ -246,7 +255,7 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str:
                     config.clientDataMinorVersion,
                     config.clientDataBuildVersion,
                 )
-                assert app_version == expected_app_ver, (
+                assert compare_version(app_version, expected_app_ver), (
                     f"App version mismatch: {app_version} != {expected_app_ver}"
                 )
                 logger.info(f"Data version: {data_version}")
@@ -261,6 +270,7 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str:
                 logger.info(f"App hash: {app_hash}")
 
                 return app_hash
+
 
 
 @aiocron.crontab("*/5 * * * *", start=False)
@@ -323,11 +333,11 @@ if __name__ == "__main__":
     # Set up UnityPy
     UnityPy.config.FALLBACK_VERSION_WARNED = True
     UnityPy.config.FALLBACK_UNITY_VERSION = DEFAULT_UNITY_VERSION
-
-    # Start the cron job to update app hash every 5 minutes
-    # update_apphash.start()
-    # Run the event loop
-    # This is necessary to keep the script running and allow the cron job to execute
-    # asyncio.get_event_loop().run_forever()
-
-    asyncio.run(update_apphash.func())
+    if not DEBUG:
+        # Start the cron job to update app hash every 5 minutes
+        update_apphash.start()
+        # Run the event loop
+        # This is necessary to keep the script running and allow the cron job to execute
+        asyncio.get_event_loop().run_forever()
+    else:
+        asyncio.run(update_apphash.func())

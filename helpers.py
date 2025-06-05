@@ -26,3 +26,19 @@ def enum_package(zip_file):
     for f in zip_file.filelist:
         if f.filename.lower().endswith(".apk"):
             yield zipfile.ZipFile(zip_file.open(f))
+
+
+def compare_version(new_version, current_version) -> bool:
+    new_version_parts = list(map(int, new_version.split(".")))
+    current_version_parts = list(map(int, current_version.split(".")))
+    max_len = max(len(new_version_parts), len(current_version_parts))
+    new_version_parts.extend([0] * (max_len - len(new_version_parts)))
+    current_version_parts.extend([0] * (max_len - len(current_version_parts)))
+
+    for i in range(max_len):
+        if new_version_parts[i] > current_version_parts[i]:
+            return True
+        elif new_version_parts[i] < current_version_parts[i]:
+            return False
+
+    return True

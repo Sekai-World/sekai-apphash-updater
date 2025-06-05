@@ -1,4 +1,5 @@
 PROXY = None
+DEBUG = False
 APPVER_CACHE_FOLDER = "cache/appver"
 APPHASH_CACHE_FOLDER = "cache/apphash"
 APPVER_JSON_CACHE_FOLDER = "cache/apphash_json"
