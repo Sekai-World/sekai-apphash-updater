@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import tempfile
+import traceback
 import zipfile
 from typing import Optional
 
@@ -272,7 +273,6 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> Optional[str
                 return app_hash
 
 
-
 @aiocron.crontab("*/5 * * * *", start=False)
 async def update_apphash():
     """
@@ -290,16 +290,19 @@ async def update_apphash():
             logger.info(f"New version available for {region}: {latest_app_ver}")
             apk_url = APKPURE_URL_TEMPLATE.format(packageName=PACKAGE_NAME_MAP[region])
             apk_path = await download_apk(apk_url)
-            app_hash = await extract_app_hash(apk_path, latest_app_ver)
+            try:
+                app_hash = await extract_app_hash(apk_path, latest_app_ver)
 
-            await save_app_hash(region, app_hash)
-            await save_app_ver(region, latest_app_ver)
-            await save_app_json(region, latest_app_ver, app_hash)
-            logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
-
-            # Clean up the temporary APK file
-            await AsyncPath(apk_path).unlink()
-            logger.info(f"Temporary APK file {apk_path} deleted.")
+                await save_app_hash(region, app_hash)
+                await save_app_ver(region, latest_app_ver)
+                await save_app_json(region, latest_app_ver, app_hash)
+                logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
+            except Exception:
+                traceback.print_exc()
+            finally:
+                # Clean up the temporary APK file
+                await AsyncPath(apk_path).unlink()
+                logger.info(f"Temporary APK file {apk_path} deleted.")
 
     # Check app available in taptap (CN only)
     for region, taptap_id in TAPTAP_APP_ID_MAP.items():
