@@ -5,25 +5,24 @@ import re
 import tempfile
 import traceback
 import zipfile
-from typing import Optional
 
-import UnityPy
-import UnityPy.enums
-import UnityPy.enums.ClassIDType
 import aiocron
 import aiofiles
 import aiohttp
 from aiopath import AsyncPath
 from bs4 import BeautifulSoup
 from tqdm.asyncio import tqdm
+import UnityPy
+import UnityPy.enums
+import UnityPy.enums.ClassIDType
 
 from config import (
     APPHASH_CACHE_FOLDER,
     APPVER_CACHE_FOLDER,
-    DEFAULT_UNITY_VERSION,
     APPVER_JSON_CACHE_FOLDER,
-    PROXY,
     DEBUG,
+    DEFAULT_UNITY_VERSION,
+    PROXY,
 )
 from constants import (
     APKPURE_URL_TEMPLATE,
@@ -37,7 +36,7 @@ from constants import (
 )
 from generated import UTTCGen_AsInstance
 from generated.Sekai import AndroidPlayerSettingConfig
-from helpers import enum_candidates, enum_package, compare_version
+from helpers import compare_version, enum_candidates, enum_package
 from logger import setup_logging_queue
 
 logger = logging.getLogger("apphash")
@@ -127,7 +126,7 @@ async def download_apk(url: str) -> str:
                     temp_file.write(data)
                     bar.update(len(data))
 
-            print(f"APK downloaded to temporary file: {temp_file.name}")
+            logger.info(f"APK downloaded to temporary file: {temp_file.name}")
             return temp_file.name
 
 
@@ -145,7 +144,7 @@ async def get_cached_app_ver(region: str) -> str | None:
         logger.warning(f"Cache file for {region} does not exist. Returning None.")
         return None
 
-    async with aiofiles.open(cache_file, "r") as f:
+    async with aiofiles.open(cache_file) as f:
         cached_app_ver = await f.read()
         logger.info(f"Cached app version for {region}: {cached_app_ver}")
         return cached_app_ver.strip()
@@ -211,7 +210,7 @@ async def save_app_json(region: str, app_ver: str, app_hash: str):
         logger.info(f"Saved app hash {app_hash} for {region} to cache.")
 
 
-async def extract_app_hash(apk_path: str, expected_app_ver: str) -> Optional[str]:
+async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str | None:
     """
     Extracts the app hash from the APK file. Thanks to sssekai project for the code.
     Args:
@@ -245,26 +244,14 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> Optional[str
                 clazz = AndroidPlayerSettingConfig
                 config = UTTCGen_AsInstance(clazz, reader)
 
-                app_version = "%s.%s.%s" % (
-                    config.clientMajorVersion,
-                    config.clientMinorVersion,
-                    config.clientBuildVersion,
-                )
+                app_version = f"{config.clientMajorVersion}.{config.clientMinorVersion}.{config.clientBuildVersion}"
                 logger.info(f"App version: {app_version}")
-                data_version = "%s.%s.%s" % (
-                    config.clientDataMajorVersion,
-                    config.clientDataMinorVersion,
-                    config.clientDataBuildVersion,
-                )
+                data_version = f"{config.clientDataMajorVersion}.{config.clientDataMinorVersion}.{config.clientDataBuildVersion}"
                 assert compare_version(app_version, expected_app_ver), (
                     f"App version mismatch: {app_version} != {expected_app_ver}"
                 )
                 logger.info(f"Data version: {data_version}")
-                ab_version = "%s.%s.%s" % (
-                    config.clientMajorVersion,
-                    config.clientMinorVersion,
-                    config.clientDataRevision,
-                )
+                ab_version = f"{config.clientMajorVersion}.{config.clientMinorVersion}.{config.clientDataRevision}"
                 logger.info(f"AB version: {ab_version}")
 
                 app_hash = config.clientAppHash
@@ -292,6 +279,10 @@ async def update_apphash():
             apk_path = await download_apk(apk_url)
             try:
                 app_hash = await extract_app_hash(apk_path, latest_app_ver)
+
+                if not app_hash:
+                    logger.error(f"Failed to extract app hash for {region} from APK.")
+                    continue
 
                 await save_app_hash(region, app_hash)
                 await save_app_ver(region, latest_app_ver)
