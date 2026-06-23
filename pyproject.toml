@@ -11,7 +11,7 @@ dependencies = [
     "aiopath>=0.7.7",
     "beautifulsoup4>=4.13.4",
     "ruff>=0.11.9",
-    "tqdm>=4.67.1",
+    "tqdm>=4.67.3",
     "unitypy>=1.22.2",
 ]
 
