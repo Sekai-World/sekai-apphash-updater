@@ -1,9 +1,11 @@
 import asyncio
+from datetime import UTC, datetime
+import html
 import json
 import logging
 import re
 import tempfile
-import traceback
+from urllib.parse import unquote
 import zipfile
 
 import aiocron
@@ -16,6 +18,7 @@ import UnityPy
 import UnityPy.enums
 import UnityPy.enums.ClassIDType
 
+import config
 from config import (
     APPHASH_CACHE_FOLDER,
     APPVER_CACHE_FOLDER,
@@ -25,6 +28,7 @@ from config import (
     PROXY,
 )
 from constants import (
+    APKCOMBO_URL_TEMPLATE,
     APKPURE_URL_TEMPLATE,
     CN_APK_URL,
     PACKAGE_NAME_MAP,
@@ -38,8 +42,19 @@ from generated import UTTCGen_AsInstance
 from generated.Sekai import AndroidPlayerSettingConfig
 from helpers import compare_version, enum_candidates, enum_package
 from logger import setup_logging_queue
+from publisher import publish_app_identity
 
 logger = logging.getLogger("apphash")
+
+# Publishing settings are optional so existing config.py files keep working.
+PUBLISH_ENABLED = getattr(config, "PUBLISH_ENABLED", False)
+PUBLISH_REPO_DIR = getattr(config, "PUBLISH_REPO_DIR", "cache/data-branch")
+PUBLISH_REMOTE_URL = getattr(config, "PUBLISH_REMOTE_URL", "https://github.com/Sekai-World/sekai-apphash-updater.git")
+PUBLISH_BRANCH = getattr(config, "PUBLISH_BRANCH", "data")
+PUBLISH_AUTHOR_NAME = getattr(config, "PUBLISH_AUTHOR_NAME", "sekai-apphash-updater")
+PUBLISH_AUTHOR_EMAIL = getattr(config, "PUBLISH_AUTHOR_EMAIL", "sekai-apphash-updater@users.noreply.github.com")
+
+_update_lock = asyncio.Lock()
 
 
 async def get_app_ver_from_taptap_cn(app_id: str) -> str:
@@ -95,6 +110,45 @@ async def get_app_ver_from_qooapp(app_id: str) -> str:
                 raise Exception(f"Failed to fetch version from QooApp: {response.status}")
 
 
+def parse_apkcombo_xapk_url(page: str, app_ver: str) -> str | None:
+    """
+    Finds the XAPK download URL for a version on an APKCombo download page.
+    Args:
+        page (str): The HTML of the download page.
+        app_ver (str): The version that must be offered.
+    Returns:
+        str: The presigned XAPK URL, or None when that version is not listed.
+    """
+    # Each variant links to /r2?u=<URL-encoded presigned URL>, labelled like
+    # "Project Sekai KR 6.4.0 (22011) XAPK 520 MB ...".
+    for match in re.finditer(r'<a href="/r2\?u=([^"]+)" class="variant"[^>]*>(.*?)</a>', page, re.S):
+        label = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", match.group(2)))
+        if f" {app_ver} " in f" {label} " and "XAPK" in label:
+            return unquote(html.unescape(match.group(1)))
+    return None
+
+
+async def resolve_apkcombo_url(package_name: str, app_ver: str) -> str:
+    """
+    Resolves the XAPK download URL for a version listed on APKCombo.
+    Args:
+        package_name (str): The Android package name.
+        app_ver (str): The version that must be offered.
+    Returns:
+        str: The presigned XAPK URL behind the matching download link.
+    """
+    url = APKCOMBO_URL_TEMPLATE.format(packageName=package_name)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers={"User-Agent": USER_AGENT}, proxy=PROXY) as response:
+            response.raise_for_status()
+            page = await response.text()
+
+    xapk_url = parse_apkcombo_xapk_url(page, app_ver)
+    if xapk_url is None:
+        raise Exception(f"APKCombo does not offer the {app_ver} XAPK for {package_name} yet")
+    return xapk_url
+
+
 async def download_apk(url: str) -> str:
     """
     Downloads an APK file from the given URL and saves it to a temporary file.
@@ -107,6 +161,7 @@ async def download_apk(url: str) -> str:
     # and tqdm to show a progress bar.
     async with aiohttp.ClientSession() as session:
         async with session.get(url, proxy=PROXY) as response:
+            response.raise_for_status()
             total_size = int(response.headers.get("content-length", 0))
             block_size = 1024  # 1 Kibibyte
 
@@ -197,6 +252,7 @@ async def save_app_json(region: str, app_ver: str, app_hash: str):
     data = {
         "appVersion": app_ver,
         "appHash": app_hash,
+        "updatedAt": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
 
     cache_file = AsyncPath(APPVER_JSON_CACHE_FOLDER) / f"{region}.json"
@@ -246,7 +302,9 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str | None:
 
                 app_version = f"{config.clientMajorVersion}.{config.clientMinorVersion}.{config.clientBuildVersion}"
                 logger.info(f"App version: {app_version}")
-                data_version = f"{config.clientDataMajorVersion}.{config.clientDataMinorVersion}.{config.clientDataBuildVersion}"
+                data_version = (
+                    f"{config.clientDataMajorVersion}.{config.clientDataMinorVersion}.{config.clientDataBuildVersion}"
+                )
                 assert compare_version(app_version, expected_app_ver), (
                     f"App version mismatch: {app_version} != {expected_app_ver}"
                 )
@@ -260,60 +318,121 @@ async def extract_app_hash(apk_path: str, expected_app_ver: str) -> str | None:
                 return app_hash
 
 
+async def download_and_extract_app_hash(apk_url: str, app_ver: str) -> str | None:
+    """
+    Downloads an APK and extracts its app hash, deleting the download afterwards.
+    Args:
+        apk_url (str): The URL of the APK to download.
+        app_ver (str): The expected app version.
+    Returns:
+        str: The app hash.
+    """
+    apk_path = await download_apk(apk_url)
+    try:
+        return await extract_app_hash(apk_path, app_ver)
+    finally:
+        # Clean up the temporary APK file
+        await AsyncPath(apk_path).unlink()
+        logger.info(f"Temporary APK file {apk_path} deleted.")
+
+
+async def qooapp_region_sources(region: str, app_ver: str) -> list[tuple[str, str]]:
+    """
+    Lists the APK sources to try for a QooApp region, APKCombo first.
+    APKPure stays as the fallback because it does not always carry the latest version promptly.
+    Args:
+        region (str): The region to download.
+        app_ver (str): The version that must be downloaded.
+    Returns:
+        list: (source name, URL) pairs in the order to try.
+    """
+    package_name = PACKAGE_NAME_MAP[region]
+    sources = []
+    try:
+        sources.append(("APKCombo", await resolve_apkcombo_url(package_name, app_ver)))
+    except Exception as error:
+        logger.warning(f"APKCombo source unavailable for {region}: {error}")
+    sources.append(("APKPure", APKPURE_URL_TEMPLATE.format(packageName=package_name)))
+    return sources
+
+
+async def update_region(region: str, latest_app_ver: str, sources) -> None:
+    """
+    Caches the app hash of a region's new version, trying each APK source in order.
+    Args:
+        region (str): The region to update.
+        latest_app_ver (str): The latest app version reported by the store.
+        sources: An async callable returning (source name, URL) pairs to try in order.
+    """
+    cached_app_ver = await get_cached_app_ver(region)
+    if cached_app_ver == latest_app_ver:
+        return
+
+    logger.info(f"New version available for {region}: {latest_app_ver}")
+    for source_name, apk_url in await sources(region, latest_app_ver):
+        try:
+            app_hash = await download_and_extract_app_hash(apk_url, latest_app_ver)
+        except Exception:
+            logger.exception(f"Extracting the {region} app hash from {source_name} failed.")
+            continue
+        if not app_hash:
+            logger.error(f"Failed to extract app hash for {region} from the {source_name} APK.")
+            continue
+
+        await save_app_hash(region, app_hash)
+        await save_app_ver(region, latest_app_ver)
+        await save_app_json(region, latest_app_ver, app_hash)
+        logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver} from {source_name}")
+        return
+
+    raise RuntimeError(f"No APK source produced the {region} {latest_app_ver} app hash")
+
+
+async def cn_sources(region: str, app_ver: str) -> list[tuple[str, str]]:
+    return [("CN mirror", CN_APK_URL)]
+
+
 @aiocron.crontab("*/5 * * * *", start=False)
 async def update_apphash():
     """
     Periodically updates the app hash by downloading the latest APK.
     """
-    # Log the start time of the update
-    logger.info("Starting app hash update...")
+    if _update_lock.locked():
+        logger.info("Previous app hash update is still running; skipping this run.")
+        return
 
-    # Check app available in qooapp
-    for region, qooapp_id in QOOAPP_APP_ID_MAP.items():
-        cached_app_ver = await get_cached_app_ver(region)
-        latest_app_ver = await get_app_ver_from_qooapp(qooapp_id)
+    async with _update_lock:
+        # Log the start time of the update
+        logger.info("Starting app hash update...")
 
-        if cached_app_ver != latest_app_ver:
-            logger.info(f"New version available for {region}: {latest_app_ver}")
-            apk_url = APKPURE_URL_TEMPLATE.format(packageName=PACKAGE_NAME_MAP[region])
-            apk_path = await download_apk(apk_url)
+        # Check app available in qooapp
+        for region, qooapp_id in QOOAPP_APP_ID_MAP.items():
             try:
-                app_hash = await extract_app_hash(apk_path, latest_app_ver)
-
-                if not app_hash:
-                    logger.error(f"Failed to extract app hash for {region} from APK.")
-                    continue
-
-                await save_app_hash(region, app_hash)
-                await save_app_ver(region, latest_app_ver)
-                await save_app_json(region, latest_app_ver, app_hash)
-                logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
+                latest_app_ver = await get_app_ver_from_qooapp(qooapp_id)
+                await update_region(region, latest_app_ver, qooapp_region_sources)
             except Exception:
-                traceback.print_exc()
-            finally:
-                # Clean up the temporary APK file
-                await AsyncPath(apk_path).unlink()
-                logger.info(f"Temporary APK file {apk_path} deleted.")
+                logger.exception(f"App hash update failed for {region}.")
 
-    # Check app available in taptap (CN only)
-    for region, taptap_id in TAPTAP_APP_ID_MAP.items():
-        cached_app_ver = await get_cached_app_ver(region)
-        latest_app_ver = await get_app_ver_from_taptap_cn(taptap_id)
+        # Check app available in taptap (CN only)
+        for region, taptap_id in TAPTAP_APP_ID_MAP.items():
+            try:
+                latest_app_ver = await get_app_ver_from_taptap_cn(taptap_id)
+                await update_region(region, latest_app_ver, cn_sources)
+            except Exception:
+                logger.exception(f"App hash update failed for {region}.")
 
-        if cached_app_ver != latest_app_ver:
-            logger.info(f"New version available for {region}: {latest_app_ver}")
-            apk_url = CN_APK_URL
-            apk_path = await download_apk(apk_url)
-            app_hash = await extract_app_hash(apk_path, latest_app_ver)
-
-            await save_app_hash(region, app_hash)
-            await save_app_ver(region, latest_app_ver)
-            await save_app_json(region, latest_app_ver, app_hash)
-            logger.info(f"App hash for {region} updated to {app_hash} for version {latest_app_ver}")
-
-            # Clean up the temporary APK file
-            await AsyncPath(apk_path).unlink()
-            logger.info(f"Temporary APK file {apk_path} deleted.")
+        if PUBLISH_ENABLED:
+            try:
+                await publish_app_identity(
+                    APPVER_JSON_CACHE_FOLDER,
+                    PUBLISH_REPO_DIR,
+                    PUBLISH_REMOTE_URL,
+                    PUBLISH_BRANCH,
+                    PUBLISH_AUTHOR_NAME,
+                    PUBLISH_AUTHOR_EMAIL,
+                )
+            except Exception:
+                logger.exception("Publishing app identity failed.")
 
 
 if __name__ == "__main__":
@@ -328,10 +447,13 @@ if __name__ == "__main__":
     UnityPy.config.FALLBACK_VERSION_WARNED = True
     UnityPy.config.FALLBACK_UNITY_VERSION = DEFAULT_UNITY_VERSION
     if not DEBUG:
+        loop = asyncio.get_event_loop()
+        # Run once right away instead of waiting for the first cron tick
+        loop.run_until_complete(update_apphash.func())
         # Start the cron job to update app hash every 5 minutes
         update_apphash.start()
         # Run the event loop
         # This is necessary to keep the script running and allow the cron job to execute
-        asyncio.get_event_loop().run_forever()
+        loop.run_forever()
     else:
         asyncio.run(update_apphash.func())

@@ -15,6 +15,14 @@ dependencies = [
     "unitypy>=1.22.2",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

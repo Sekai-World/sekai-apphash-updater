@@ -1,3 +1,4 @@
+APKCOMBO_URL_TEMPLATE = "https://apkcombo.com/app/{packageName}/download/apk"
 APKPURE_URL_TEMPLATE = "https://d.apkpure.net/b/XAPK/{packageName}?version=latest"
 CN_APK_URL = "https://ugapk.com/djogd"
 QOOAPP_URL_TEMPLATE = "https://apps.qoo-app.com/en/app/{app_id}"
